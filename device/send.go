@@ -144,9 +144,19 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 		}
 	}
 
-	sendBuffer = append(sendBuffer, peer.device.JunkPackets()...)
-
 	padding := int(peer.device.paddings.init.Load())
+	peer.handshake.mutex.RLock()
+	psk := peer.handshake.presharedKey
+	peer.handshake.mutex.RUnlock()
+
+	if !isZero(psk[:]) {
+		dynHeaders := GetDynamicHeaders(psk[:], 0)
+		sendBuffer = append(sendBuffer, peer.device.JunkPacketsWithLen(dynHeaders.JunkLen)...)
+		padding = dynHeaders.JunkLen
+	} else {
+		sendBuffer = append(sendBuffer, peer.device.JunkPackets()...)
+	}
+
 	trailerLen := max(peer.randomTrailer(padding+MessageInitiationSize), 0)
 
 	buf := make([]byte, padding+MessageInitiationSize+trailerLen)
@@ -197,6 +207,13 @@ func (peer *Peer) SendHandshakeResponse() error {
 	}
 
 	padding := int(peer.device.paddings.response.Load())
+	peer.handshake.mutex.RLock()
+	psk := peer.handshake.presharedKey
+	peer.handshake.mutex.RUnlock()
+	if !isZero(psk[:]) {
+		dynHeaders := GetDynamicHeaders(psk[:], 0)
+		padding = dynHeaders.JunkLen
+	}
 	trailerLen := max(peer.randomTrailer(padding+MessageResponseSize), 0)
 
 	buf := make([]byte, padding+MessageResponseSize+trailerLen)
@@ -597,7 +614,16 @@ func (device *Device) RoutineEncryption(id int) {
 			fieldReceiver := header[4:8]
 			fieldNonce := header[8:16]
 
-			binary.LittleEndian.PutUint32(fieldType, device.headers.transport.Load().PickOne())
+			elem.peer.handshake.mutex.RLock()
+			psk := elem.peer.handshake.presharedKey
+			elem.peer.handshake.mutex.RUnlock()
+
+			if !isZero(psk[:]) || device.headers.transport.Load().IsZero() {
+				dynHeaders := GetDynamicHeaders(psk[:], 0)
+				binary.LittleEndian.PutUint32(fieldType, dynHeaders.DataHeader)
+			} else {
+				binary.LittleEndian.PutUint32(fieldType, device.headers.transport.Load().PickOne())
+			}
 			binary.LittleEndian.PutUint32(fieldReceiver, elem.keypair.remoteIndex)
 			binary.LittleEndian.PutUint64(fieldNonce, elem.nonce)
 

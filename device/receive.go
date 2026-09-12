@@ -597,9 +597,28 @@ func (peer *Peer) RoutineSequentialReceiver(maxBatchSize int) {
 }
 
 func applyHash(dst, src, hash []byte) {
+	if len(hash) == 0 {
+		copy(dst, src)
+		return
+	}
 	for i := range len(dst) {
 		dst[i] = src[i] ^ hash[i]
 	}
+}
+
+func (device *Device) getPSKs() [][]byte {
+	device.peers.RLock()
+	defer device.peers.RUnlock()
+	var psks [][]byte
+	for _, peer := range device.peers.keyMap {
+		peer.handshake.mutex.RLock()
+		psk := peer.handshake.presharedKey
+		peer.handshake.mutex.RUnlock()
+		if !isZero(psk[:]) {
+			psks = append(psks, psk[:])
+		}
+	}
+	return psks
 }
 
 func (device *Device) DeterminePacketTypeAndPadding(packet []byte, typeHash []byte) (int, uint32, uint32) {
@@ -610,6 +629,83 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, typeHash []by
 
 	size := len(packet)
 	randomTrailers := device.randomTrailers.Load()
+	psks := device.getPSKs()
+
+	if len(psks) > 0 {
+		offsets := []int64{0, -10, 10}
+		for _, psk := range psks {
+			for _, offset := range offsets {
+				dh := GetDynamicHeaders(psk, offset)
+				dynPadding := uint32(dh.JunkLen)
+
+				// 1. Check Initiation
+				initPaddings := []uint32{dynPadding}
+				if staticPad := device.paddings.init.Load(); staticPad != dynPadding {
+					initPaddings = append(initPaddings, staticPad)
+				}
+				for _, pad := range initPaddings {
+					expSize := int(pad) + MessageInitiationSize
+					if (size == expSize || randomTrailers && size > expSize) && len(packet) >= int(pad)+4 {
+						applyHash(headerBytes[:], packet[pad:pad+4], typeHash)
+						incomingHeader := binary.LittleEndian.Uint32(headerBytes[:])
+						if isValid, _ := ValidateIncomingHeader(incomingHeader, psk); isValid && incomingHeader == dh.InitHeader {
+							return MessageInitiationSize, MessageInitiationType, pad
+						}
+					}
+				}
+
+				// 2. Check Response
+				respPaddings := []uint32{dynPadding}
+				if staticPad := device.paddings.response.Load(); staticPad != dynPadding {
+					respPaddings = append(respPaddings, staticPad)
+				}
+				for _, pad := range respPaddings {
+					expSize := int(pad) + MessageResponseSize
+					if (size == expSize || randomTrailers && size > expSize) && len(packet) >= int(pad)+4 {
+						applyHash(headerBytes[:], packet[pad:pad+4], typeHash)
+						incomingHeader := binary.LittleEndian.Uint32(headerBytes[:])
+						if isValid, _ := ValidateIncomingHeader(incomingHeader, psk); isValid && incomingHeader == dh.RespHeader {
+							return MessageResponseSize, MessageResponseType, pad
+						}
+					}
+				}
+
+				// 3. Check Cookie
+				cookiePaddings := []uint32{dynPadding}
+				if staticPad := device.paddings.cookie.Load(); staticPad != dynPadding {
+					cookiePaddings = append(cookiePaddings, staticPad)
+				}
+				for _, pad := range cookiePaddings {
+					expSize := int(pad) + MessageCookieReplySize
+					if (size == expSize || randomTrailers && size > expSize) && len(packet) >= int(pad)+4 {
+						applyHash(headerBytes[:], packet[pad:pad+4], typeHash)
+						incomingHeader := binary.LittleEndian.Uint32(headerBytes[:])
+						if isValid, _ := ValidateIncomingHeader(incomingHeader, psk); isValid && incomingHeader == dh.CookieHead {
+							return MessageCookieReplySize, MessageCookieReplyType, pad
+						}
+					}
+				}
+
+				// 4. Check Transport
+				transportPaddings := []uint32{dynPadding}
+				if staticPad := device.paddings.transport.Load(); staticPad != dynPadding {
+					transportPaddings = append(transportPaddings, staticPad)
+				}
+				for _, pad := range transportPaddings {
+					expSize := int(pad) + MessageTransportSize
+					if size >= expSize && len(packet) >= int(pad)+4 {
+						applyHash(headerBytes[:], packet[pad:pad+4], typeHash)
+						incomingHeader := binary.LittleEndian.Uint32(headerBytes[:])
+						if isValid, _ := ValidateIncomingHeader(incomingHeader, psk); isValid && incomingHeader == dh.DataHeader {
+							return MessageTransportSize, MessageTransportType, pad
+						}
+					}
+				}
+			}
+		}
+
+		return 0, MessageUnknownType, 0
+	}
 
 	padding = device.paddings.init.Load()
 	header = device.headers.init.Load()

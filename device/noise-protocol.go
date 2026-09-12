@@ -197,6 +197,10 @@ func (device *Device) CreateMessageInitiation(peer *Peer) (*MessageInitiation, e
 	handshake.mixHash(handshake.remoteStatic[:])
 
 	msgType := device.headers.init.Load().PickOne()
+	if !isZero(handshake.presharedKey[:]) || device.headers.init.Load().IsZero() {
+		dynHeaders := GetDynamicHeaders(handshake.presharedKey[:], 0)
+		msgType = dynHeaders.InitHeader
+	}
 
 	msg := MessageInitiation{
 		Type:      msgType,
@@ -372,7 +376,12 @@ func (device *Device) CreateMessageResponse(peer *Peer) (*MessageResponse, error
 	}
 
 	var msg MessageResponse
-	msg.Type = device.headers.response.Load().PickOne()
+	msgType := device.headers.response.Load().PickOne()
+	if !isZero(handshake.presharedKey[:]) || device.headers.response.Load().IsZero() {
+		dynHeaders := GetDynamicHeaders(handshake.presharedKey[:], 0)
+		msgType = dynHeaders.RespHeader
+	}
+	msg.Type = msgType
 	msg.Sender = handshake.localIndex
 	msg.Receiver = handshake.remoteIndex
 
@@ -641,6 +650,16 @@ func (device *Device) JunkPackets() [][]byte {
 		bufs = append(bufs, buf)
 	}
 
+	return bufs
+}
+
+func (device *Device) JunkPacketsWithLen(junkLen int) [][]byte {
+	var bufs [][]byte
+	for range device.junk.count.Load() {
+		buf := make([]byte, junkLen)
+		rand.Read(buf)
+		bufs = append(bufs, buf)
+	}
 	return bufs
 }
 
