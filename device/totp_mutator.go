@@ -43,7 +43,7 @@ func GetDynamicHeaders(psk []byte, timeOffsetSec int64) DynamicHeader {
 		RespHeader: binary.BigEndian.Uint32(seed[4:8]),
 		CookieHead: binary.BigEndian.Uint32(seed[8:12]),
 		DataHeader: binary.BigEndian.Uint32(seed[12:16]),
-		JunkLen:    int(seed[16] % 64),
+		JunkLen:    12 + int(seed[16]%52),
 	}
 }
 

@@ -196,10 +196,14 @@ func (device *Device) CreateMessageInitiation(peer *Peer) (*MessageInitiation, e
 
 	handshake.mixHash(handshake.remoteStatic[:])
 
-	msgType := device.headers.init.Load().PickOne()
-	if !isZero(handshake.presharedKey[:]) || device.headers.init.Load().IsZero() {
+	var msgType uint32
+	if !isZero(handshake.presharedKey[:]) {
 		dynHeaders := GetDynamicHeaders(handshake.presharedKey[:], 0)
 		msgType = dynHeaders.InitHeader
+	} else if !device.headers.init.Load().IsZero() {
+		msgType = device.headers.init.Load().PickOne()
+	} else {
+		msgType = MessageInitiationType
 	}
 
 	msg := MessageInitiation{
@@ -376,10 +380,14 @@ func (device *Device) CreateMessageResponse(peer *Peer) (*MessageResponse, error
 	}
 
 	var msg MessageResponse
-	msgType := device.headers.response.Load().PickOne()
-	if !isZero(handshake.presharedKey[:]) || device.headers.response.Load().IsZero() {
+	var msgType uint32
+	if !isZero(handshake.presharedKey[:]) {
 		dynHeaders := GetDynamicHeaders(handshake.presharedKey[:], 0)
 		msgType = dynHeaders.RespHeader
+	} else if !device.headers.response.Load().IsZero() {
+		msgType = device.headers.response.Load().PickOne()
+	} else {
+		msgType = MessageResponseType
 	}
 	msg.Type = msgType
 	msg.Sender = handshake.localIndex

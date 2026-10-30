@@ -618,12 +618,16 @@ func (device *Device) RoutineEncryption(id int) {
 			psk := elem.peer.handshake.presharedKey
 			elem.peer.handshake.mutex.RUnlock()
 
-			if !isZero(psk[:]) || device.headers.transport.Load().IsZero() {
+			var msgType uint32
+			if !isZero(psk[:]) {
 				dynHeaders := GetDynamicHeaders(psk[:], 0)
-				binary.LittleEndian.PutUint32(fieldType, dynHeaders.DataHeader)
+				msgType = dynHeaders.DataHeader
+			} else if !device.headers.transport.Load().IsZero() {
+				msgType = device.headers.transport.Load().PickOne()
 			} else {
-				binary.LittleEndian.PutUint32(fieldType, device.headers.transport.Load().PickOne())
+				msgType = MessageTransportType
 			}
+			binary.LittleEndian.PutUint32(fieldType, msgType)
 			binary.LittleEndian.PutUint32(fieldReceiver, elem.keypair.remoteIndex)
 			binary.LittleEndian.PutUint64(fieldNonce, elem.nonce)
 

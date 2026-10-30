@@ -26,7 +26,7 @@ func TestTOTPMutatorBasic(t *testing.T) {
 	expectedResp := binary.BigEndian.Uint32(expectedSeed[4:8])
 	expectedCookie := binary.BigEndian.Uint32(expectedSeed[8:12])
 	expectedData := binary.BigEndian.Uint32(expectedSeed[12:16])
-	expectedJunkLen := int(expectedSeed[16] % 64)
+	expectedJunkLen := 12 + int(expectedSeed[16]%52)
 
 	if dh0.InitHeader != expectedInit {
 		t.Fatalf("InitHeader mismatch: got %x, expected %x", dh0.InitHeader, expectedInit)
@@ -43,8 +43,8 @@ func TestTOTPMutatorBasic(t *testing.T) {
 	if dh0.JunkLen != expectedJunkLen {
 		t.Fatalf("JunkLen mismatch: got %d, expected %d", dh0.JunkLen, expectedJunkLen)
 	}
-	if dh0.JunkLen < 0 || dh0.JunkLen >= 64 {
-		t.Fatalf("JunkLen out of range [0, 63]: got %d", dh0.JunkLen)
+	if dh0.JunkLen < 12 || dh0.JunkLen >= 64 {
+		t.Fatalf("JunkLen out of range [12, 63]: got %d", dh0.JunkLen)
 	}
 }
 
@@ -194,3 +194,66 @@ func TestJunkPacketsDynamicLen(t *testing.T) {
 	}
 }
 
+func TestClassicAmneziaFallback(t *testing.T) {
+	device := new(Device)
+	device.peers.keyMap = make(map[NoisePublicKey]*Peer)
+
+	// Configure a peer WITH PSK on the server
+	var psk NoisePresharedKey
+	copy(psk[:], []byte("totp-test-psk-32-bytes-long-key!"))
+	peerWithPSK := new(Peer)
+	peerWithPSK.device = device
+	peerWithPSK.handshake.presharedKey = psk
+	var pk NoisePublicKey
+	copy(pk[:], []byte("fake-peer-pubkey-32-bytes-long!"))
+	device.peers.keyMap[pk] = peerWithPSK
+
+	// Static Amnezia configuration (e.g. H1=100, S1=15, H4=200, S4=20)
+	var r1, r4 UintRange
+	r1.FromUint32(100, 100)
+	r4.FromUint32(200, 200)
+	device.headers.init.Store(r1)
+	device.paddings.init.Store(15)
+	device.headers.transport.Store(r4)
+	device.paddings.transport.Store(20)
+
+	// 1. Packet from a classic Amnezia user (static H1=100, S1=15)
+	classicInit := make([]byte, 15+MessageInitiationSize)
+	binary.LittleEndian.PutUint32(classicInit[15:15+4], 100)
+
+	msgSize, msgType, pad := device.DeterminePacketTypeAndPadding(classicInit, nil)
+	if msgType != MessageInitiationType {
+		t.Fatalf("Expected MessageInitiationType for classic Amnezia client, got %d", msgType)
+	}
+	if pad != 15 {
+		t.Fatalf("Expected padding 15, got %d", pad)
+	}
+	if msgSize != MessageInitiationSize {
+		t.Fatalf("Expected MessageInitiationSize %d, got %d", MessageInitiationSize, msgSize)
+	}
+
+	// 2. Transport packet from a classic Amnezia user (static H4=200, S4=20)
+	classicData := make([]byte, 20+MessageTransportSize+50)
+	binary.LittleEndian.PutUint32(classicData[20:20+4], 200)
+
+	msgSize, msgType, pad = device.DeterminePacketTypeAndPadding(classicData, nil)
+	if msgType != MessageTransportType {
+		t.Fatalf("Expected MessageTransportType for classic Amnezia transport, got %d", msgType)
+	}
+	if pad != 20 {
+		t.Fatalf("Expected padding 20, got %d", pad)
+	}
+
+	// 3. Packet from a TOTP user on the same server should still work
+	dh := GetDynamicHeaders(psk[:], 0)
+	totpInit := make([]byte, int(dh.JunkLen)+MessageInitiationSize)
+	binary.LittleEndian.PutUint32(totpInit[dh.JunkLen:dh.JunkLen+4], dh.InitHeader)
+
+	msgSize, msgType, pad = device.DeterminePacketTypeAndPadding(totpInit, nil)
+	if msgType != MessageInitiationType {
+		t.Fatalf("Expected MessageInitiationType for TOTP client, got %d", msgType)
+	}
+	if pad != uint32(dh.JunkLen) {
+		t.Fatalf("Expected padding %d for TOTP client, got %d", dh.JunkLen, pad)
+	}
+}

@@ -704,7 +704,6 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, typeHash []by
 			}
 		}
 
-		return 0, MessageUnknownType, 0
 	}
 
 	padding = device.paddings.init.Load()
@@ -713,7 +712,8 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, typeHash []by
 
 	if size == expectedSize || randomTrailers && size > expectedSize {
 		applyHash(headerBytes[:], packet[padding:padding+4], typeHash)
-		if header.Contains(binary.LittleEndian.Uint32(headerBytes[:])) {
+		h := binary.LittleEndian.Uint32(headerBytes[:])
+		if (header.IsZero() && h == MessageInitiationType) || (!header.IsZero() && header.Contains(h)) {
 			return MessageInitiationSize, MessageInitiationType, padding
 		}
 	}
@@ -724,7 +724,8 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, typeHash []by
 
 	if size == expectedSize || randomTrailers && size > expectedSize {
 		applyHash(headerBytes[:], packet[padding:padding+4], typeHash)
-		if header.Contains(binary.LittleEndian.Uint32(headerBytes[:])) {
+		h := binary.LittleEndian.Uint32(headerBytes[:])
+		if (header.IsZero() && h == MessageResponseType) || (!header.IsZero() && header.Contains(h)) {
 			return MessageResponseSize, MessageResponseType, padding
 		}
 	}
@@ -735,7 +736,8 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, typeHash []by
 
 	if size == expectedSize || randomTrailers && size > expectedSize {
 		applyHash(headerBytes[:], packet[padding:padding+4], typeHash)
-		if header.Contains(binary.LittleEndian.Uint32(headerBytes[:])) {
+		h := binary.LittleEndian.Uint32(headerBytes[:])
+		if (header.IsZero() && h == MessageCookieReplyType) || (!header.IsZero() && header.Contains(h)) {
 			return MessageCookieReplySize, MessageCookieReplyType, padding
 		}
 	}
@@ -746,7 +748,8 @@ func (device *Device) DeterminePacketTypeAndPadding(packet []byte, typeHash []by
 
 	if size >= expectedSize {
 		applyHash(headerBytes[:], packet[padding:padding+4], typeHash)
-		if header.Contains(binary.LittleEndian.Uint32(headerBytes[:])) {
+		h := binary.LittleEndian.Uint32(headerBytes[:])
+		if (header.IsZero() && h == MessageTransportType) || (!header.IsZero() && header.Contains(h)) {
 			return MessageTransportSize, MessageTransportType, padding
 		}
 	}
